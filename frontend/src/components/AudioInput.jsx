@@ -22,13 +22,23 @@ export default function AudioInput({ onAnalyze }) {
   const [recording, setRecording] = useState(false)
   const [recTime, setRecTime] = useState(0)
   const [recError, setRecError] = useState(null)
+  const [recUrl, setRecUrl] = useState(null) // blob URL of the latest recording
 
   const fileInputRef = useRef()
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
   const timerRef = useRef(null)
 
-  useEffect(() => () => clearInterval(timerRef.current), [])
+  // revoke blob URL on unmount
+  useEffect(() => () => {
+    clearInterval(timerRef.current)
+    if (recUrl) URL.revokeObjectURL(recUrl)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const _clearRecording = () => {
+    if (recUrl) URL.revokeObjectURL(recUrl)
+    setRecUrl(null)
+  }
 
   const selectFile = (f) => {
     if (!f) return
@@ -36,6 +46,7 @@ export default function AudioInput({ onAnalyze }) {
       alert('Please select an audio file (MP3, WAV, WebM, OGG, FLAC, M4A)')
       return
     }
+    _clearRecording()
     setFile(f)
   }
 
@@ -47,6 +58,8 @@ export default function AudioInput({ onAnalyze }) {
 
   const startRecording = async () => {
     setRecError(null)
+    _clearRecording()
+    setFile(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
@@ -61,7 +74,9 @@ export default function AudioInput({ onAnalyze }) {
         const cleanMime = mimeType.split(';')[0]
         const blob = new Blob(chunksRef.current, { type: cleanMime })
         const ext = cleanMime === 'audio/webm' ? 'webm' : 'ogg'
-        setFile(new File([blob], `recording.${ext}`, { type: cleanMime }))
+        const recordedFile = new File([blob], `recording.${ext}`, { type: cleanMime })
+        setFile(recordedFile)
+        setRecUrl(URL.createObjectURL(blob))
         setRecording(false)
         setRecTime(0)
       }
@@ -77,56 +92,102 @@ export default function AudioInput({ onAnalyze }) {
 
   const stopRecording = () => mediaRecorderRef.current?.stop()
 
+  const discardRecording = () => {
+    _clearRecording()
+    setFile(null)
+  }
+
+  const isFromRecording = !!recUrl
+
   return (
     <div className="w-full max-w-lg space-y-4">
-      {/* Drop zone */}
-      <div
-        onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current.click()}
-        className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer select-none transition-colors ${
-          isDragging
-            ? 'border-indigo-400 bg-indigo-50'
-            : file
-              ? 'border-indigo-300 bg-indigo-50/40 hover:bg-indigo-50'
-              : 'border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50'
-        }`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/*"
-          className="hidden"
-          onChange={e => selectFile(e.target.files[0])}
-        />
+      {/* Drop zone — hidden while a recording preview is shown */}
+      {!isFromRecording && (
+        <div
+          onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current.click()}
+          className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer select-none transition-colors ${
+            isDragging
+              ? 'border-indigo-400 bg-indigo-50'
+              : file
+                ? 'border-indigo-300 bg-indigo-50/40 hover:bg-indigo-50'
+                : 'border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50'
+          }`}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={e => selectFile(e.target.files[0])}
+          />
 
-        {file ? (
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
-              <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          {file ? (
+            <div className="flex items-center justify-center gap-3">
+              <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+              </div>
+              <div className="text-left">
+                <p className="text-slate-800 font-medium text-sm max-w-xs truncate">{file.name}</p>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  {(file.size / 1024 / 1024).toFixed(1)} MB · click to change
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <svg className="w-10 h-10 text-slate-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
+              <p className="text-slate-600 font-medium">Drop audio file here</p>
+              <p className="text-slate-400 text-sm mt-1">MP3, WAV, WebM, OGG, FLAC, M4A — up to 100 MB</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Recording preview — shown after stopping, replaces the drop zone */}
+      {isFromRecording && !recording && (
+        <div className="border border-slate-200 bg-white rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center shrink-0">
+                <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-800">Recording ready</p>
+                <p className="text-xs text-slate-400">{file && `${(file.size / 1024).toFixed(0)} KB · ${file.name}`}</p>
+              </div>
             </div>
-            <div className="text-left">
-              <p className="text-slate-800 font-medium text-sm max-w-xs truncate">{file.name}</p>
-              <p className="text-slate-400 text-xs mt-0.5">
-                {(file.size / 1024 / 1024).toFixed(1)} MB · click to change
-              </p>
-            </div>
+            <button
+              onClick={discardRecording}
+              title="Discard recording"
+              className="text-slate-300 hover:text-red-400 transition-colors p-1"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
-        ) : (
-          <>
-            <svg className="w-10 h-10 text-slate-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <p className="text-slate-600 font-medium">Drop audio file here</p>
-            <p className="text-slate-400 text-sm mt-1">MP3, WAV, WebM, OGG, FLAC, M4A — up to 100 MB</p>
-          </>
-        )}
-      </div>
+
+          {/* Native audio preview */}
+          <audio
+            src={recUrl}
+            controls
+            className="w-full h-9"
+            style={{ colorScheme: 'light' }}
+          />
+        </div>
+      )}
 
       {/* Divider */}
       <div className="flex items-center gap-3">
@@ -161,7 +222,7 @@ export default function AudioInput({ onAnalyze }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
           </svg>
-          Record from microphone
+          {isFromRecording ? 'Record again' : 'Record from microphone'}
         </button>
       )}
 
@@ -172,7 +233,7 @@ export default function AudioInput({ onAnalyze }) {
       {/* Analyze button */}
       <button
         onClick={() => file && onAnalyze(file)}
-        disabled={!file}
+        disabled={!file || recording}
         className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-colors text-sm"
       >
         Analyze with Gemini →

@@ -3,7 +3,7 @@ import AudioInput from './components/AudioInput'
 import AudioPlayer from './components/AudioPlayer'
 import TranscriptTab from './components/TranscriptTab'
 import AnalysisTab from './components/AnalysisTab'
-import { analyzeAudio } from './api'
+import { analyzeAudioStream } from './api'
 
 const TABS = [
   { id: 'transcript', label: 'Transcript' },
@@ -19,7 +19,7 @@ function MicIcon({ className }) {
   )
 }
 
-function LoadingView({ fileName }) {
+function LoadingView({ fileName, statusMessage }) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-5">
       <div className="relative">
@@ -29,10 +29,12 @@ function LoadingView({ fileName }) {
           <MicIcon className="w-5 h-5 text-indigo-400" />
         </div>
       </div>
-      <div className="text-center">
+      <div className="text-center max-w-sm px-4">
         <p className="text-slate-800 font-semibold text-lg">Analyzing with Gemini</p>
-        <p className="text-slate-400 text-sm mt-1 max-w-xs truncate">{fileName}</p>
-        <p className="text-slate-300 text-xs mt-3">Transcribing · detecting speakers · extracting intent & sentiment</p>
+        <p className="text-slate-400 text-sm mt-1 truncate">{fileName}</p>
+        <p className="text-slate-400 text-xs mt-3 min-h-[1rem] transition-all duration-300">
+          {statusMessage || 'Connecting…'}
+        </p>
       </div>
     </div>
   )
@@ -45,17 +47,28 @@ export default function App() {
   const [fileName, setFileName] = useState('')
   const [audioUrl, setAudioUrl] = useState(null)
   const [activeTab, setActiveTab] = useState('transcript')
+  const [statusMessage, setStatusMessage] = useState('')
 
   const handleAnalyze = useCallback(async (file) => {
     setFileName(file.name)
     setAudioUrl(URL.createObjectURL(file))
     setError(null)
+    setStatusMessage('')
     setStage('loading')
+
     try {
-      const data = await analyzeAudio(file)
-      setResult(data)
-      setActiveTab('transcript')
-      setStage('result')
+      await analyzeAudioStream(file, {
+        onStatus: setStatusMessage,
+        onComplete: (data) => {
+          setResult(data)
+          setActiveTab('transcript')
+          setStage('result')
+        },
+        onError: (err) => {
+          setError(err.message)
+          setStage('input')
+        },
+      })
     } catch (err) {
       setError(err.message)
       setStage('input')
@@ -67,10 +80,11 @@ export default function App() {
     setResult(null)
     setError(null)
     setFileName('')
+    setStatusMessage('')
     setAudioUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
   }, [])
 
-  if (stage === 'loading') return <LoadingView fileName={fileName} />
+  if (stage === 'loading') return <LoadingView fileName={fileName} statusMessage={statusMessage} />
 
   if (stage === 'result' && result) {
     return (

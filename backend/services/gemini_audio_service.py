@@ -102,39 +102,7 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-async def analyze_audio(audio_bytes: bytes, mime_type: str) -> AnalysisResult:
-    """Send audio directly to Gemini; returns transcript, intent, and sentiment in one call."""
-    model = _get_model()
-
-    uploaded_file = await asyncio.to_thread(
-        genai.upload_file,
-        io.BytesIO(audio_bytes),
-        mime_type=mime_type,
-        display_name="audio_upload",
-    )
-
-    try:
-        response = await asyncio.to_thread(
-            model.generate_content,
-            [uploaded_file, _ANALYSIS_PROMPT],
-            generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                response_mime_type="application/json",
-            ),
-        )
-        data = _extract_json(response.text)
-    except json.JSONDecodeError as e:
-        logger.error("Gemini audio JSON parse error: %s\nRaw: %s", e, response.text)
-        raise RuntimeError("Audio analysis returned malformed JSON") from e
-    except Exception as e:
-        logger.error("Gemini audio analysis failed: %s", e)
-        raise RuntimeError(f"Audio analysis failed: {e}") from e
-    finally:
-        try:
-            await asyncio.to_thread(genai.delete_file, uploaded_file.name)
-        except Exception:
-            pass
-
+def _build_result(data: dict) -> AnalysisResult:
     t = data.get("transcript", {})
     segments = [
         SpeakerSegment(
@@ -196,3 +164,88 @@ async def analyze_audio(audio_bytes: bytes, mime_type: str) -> AnalysisResult:
     )
 
     return AnalysisResult(transcript=transcript, intent=intent, sentiment=sentiment)
+
+
+async def analyze_audio(audio_bytes: bytes, mime_type: str) -> AnalysisResult:
+    """Send audio directly to Gemini; returns transcript, intent, and sentiment in one call."""
+    model = _get_model()
+
+    uploaded_file = await asyncio.to_thread(
+        genai.upload_file,
+        io.BytesIO(audio_bytes),
+        mime_type=mime_type,
+        display_name="audio_upload",
+    )
+
+    try:
+        response = await asyncio.to_thread(
+            model.generate_content,
+            [uploaded_file, _ANALYSIS_PROMPT],
+            generation_config=genai.GenerationConfig(
+                temperature=0.2,
+                response_mime_type="application/json",
+            ),
+        )
+        data = _extract_json(response.text)
+        return _build_result(data)
+    except json.JSONDecodeError as e:
+        logger.error("Gemini audio JSON parse error: %s\nRaw: %s", e, response.text)
+        raise RuntimeError("Audio analysis returned malformed JSON") from e
+    except Exception as e:
+        logger.error("Gemini audio analysis failed: %s", e)
+        raise RuntimeError(f"Audio analysis failed: {e}") from e
+    finally:
+        try:
+            await asyncio.to_thread(genai.delete_file, uploaded_file.name)
+        except Exception:
+            pass
+
+
+async def analyze_audio_stream(audio_bytes: bytes, mime_type: str):
+    """Async generator that yields SSE-formatted strings, streaming progress during analysis."""
+
+    def _sse(event: dict) -> str:
+        return f"data: {json.dumps(event)}\n\n"
+
+    model = _get_model()
+    uploaded_file = None
+
+    try:
+        yield _sse({"type": "status", "message": "Uploading audio to Gemini…"})
+
+        uploaded_file = await asyncio.to_thread(
+            genai.upload_file,
+            io.BytesIO(audio_bytes),
+            mime_type=mime_type,
+            display_name="audio_upload",
+        )
+
+        yield _sse({"type": "status", "message": "Analyzing — transcribing, detecting speakers, extracting intent & sentiment…"})
+
+        response = await asyncio.to_thread(
+            model.generate_content,
+            [uploaded_file, _ANALYSIS_PROMPT],
+            generation_config=genai.GenerationConfig(
+                temperature=0.2,
+                response_mime_type="application/json",
+            ),
+        )
+
+        yield _sse({"type": "status", "message": "Processing results…"})
+
+        data = _extract_json(response.text)
+        result = _build_result(data)
+        yield _sse({"type": "complete", "data": result.model_dump()})
+
+    except json.JSONDecodeError as e:
+        logger.error("Gemini stream JSON parse error: %s", e)
+        yield _sse({"type": "error", "message": "Audio analysis returned malformed JSON"})
+    except Exception as e:
+        logger.error("Gemini stream analysis failed: %s", e)
+        yield _sse({"type": "error", "message": f"Audio analysis failed: {e}"})
+    finally:
+        if uploaded_file:
+            try:
+                await asyncio.to_thread(genai.delete_file, uploaded_file.name)
+            except Exception:
+                pass
