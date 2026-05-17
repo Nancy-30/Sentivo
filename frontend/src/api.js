@@ -1,4 +1,7 @@
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+// Empty string → same-origin in production (FastAPI serves the built frontend).
+// Set VITE_API_URL in .env.local only if you need to override (e.g. remote backend in dev).
+// The Vite dev-server proxy already forwards /api → localhost:8000, so no override is needed.
+const BASE = import.meta.env.VITE_API_URL ?? ''
 
 export async function analyzeAudio(file) {
   const fd = new FormData()
